@@ -198,6 +198,7 @@ pub extern "system" fn XMemFreeDefault(address: *mut c_void, attributes: u64) {
 
 #[no_mangle]
 pub extern "system" fn XMemSetAllocationHooks(alloc: usize, free: usize) {
+    let free = if alloc == 0 { 0 } else { free };
     ALLOC_HOOK.store(alloc, Ordering::Release);
     FREE_HOOK.store(free, Ordering::Release);
     record(M, "XMemSetAllocationHooks", &format!("alloc={alloc:#x} free={free:#x}"));
@@ -311,6 +312,24 @@ pub unsafe extern "system" fn XMemGetAllocationStatistics(memory_type: u32, alt:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_allocator_restores_the_default_free_hook() {
+        thread_local! {
+            static FREE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        unsafe extern "system" fn counting_free(address: *mut c_void, attributes: u64) {
+            FREE_CALLS.with(|calls| calls.set(calls.get() + 1));
+            XMemFreeDefault(address, attributes);
+        }
+        let free = counting_free as *const () as usize;
+        XMemSetAllocationHooks(XMemAllocDefault as *const () as usize, free);
+        XMemFree(XMemAlloc(32, 0), 0);
+        XMemSetAllocationHooks(0, free);
+        XMemFree(XMemAlloc(32, 0), 0);
+        XMemSetAllocationHooks(0, 0);
+        assert_eq!(FREE_CALLS.with(|calls| calls.get()), 1);
+    }
 
     #[test]
     fn attribute_fields_match_console_decode() {
