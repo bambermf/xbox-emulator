@@ -858,11 +858,18 @@ pub unsafe extern "system" fn end_capture(arg: u32) -> i32 {
     }
     let mut code = 0u32;
     let hr = if GetExitCodeThread(0, &mut code) != 0 { code as i32 } else { hr_from_win32(GetLastError()) };
+    let legacy = os_build() == 19041;
+    if legacy && hr < 0 {
+        return hr;
+    }
     let _g = lock(&CAPTURE_CS);
     CAPTURE.state.store(0, Ordering::SeqCst);
     let h = CAPTURE.handler.load(Ordering::SeqCst) as *const CaptureHandler;
     if !h.is_null() {
         ((*h).end)((*h).ctx);
+    }
+    if legacy {
+        return if h.is_null() { S_FALSE } else { S_OK };
     }
     if CAPTURE.pending_if.swap(0, Ordering::SeqCst) != 0 {
         set_capture_interface(0, 0);
