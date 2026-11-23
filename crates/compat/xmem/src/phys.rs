@@ -9,7 +9,7 @@ use compat_common::record;
 mod runs;
 
 const M: &str = "xmem";
-pub const PAGE: usize = 0x1_0000;
+pub use compat_common::physical_pages::PAGE_BYTES as PAGE;
 
 const MEM_PRIVATE: u32 = 0x2_0000;
 const MEM_RESERVE_PLACEHOLDER: u32 = 0x4_0000;
@@ -135,7 +135,7 @@ static S: Mutex<Option<State>> = Mutex::new(None);
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut g = S.lock().unwrap_or_else(|e| e.into_inner());
     let s = g.get_or_insert_with(|| State {
-        next_pfn: 0x1000,
+        next_pfn: compat_common::physical_pages::FIRST_TITLE_PAGE,
         next_section: 1,
         sections: HashMap::new(),
         pfns: HashMap::new(),

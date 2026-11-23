@@ -217,7 +217,11 @@ pub unsafe extern "system" fn XMemGetPhysicalMemoryLayout(out: *mut PhysicalMemo
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    *out = PhysicalMemoryLayout { base: 0, size: system_memory().total_phys };
+    if compat_common::os_host::routes::current_build() == 19041 {
+        out.cast::<[u64; 2]>().write_unaligned(compat_common::physical_pages::TITLE_LAYOUT_19041);
+    } else {
+        *out = PhysicalMemoryLayout { base: 0, size: system_memory().total_phys };
+    }
     1
 }
 
@@ -421,7 +425,11 @@ mod tests {
         assert!(f.free_bytes <= f.total_bytes && f.total_bytes > 0);
         let mut l = PhysicalMemoryLayout::default();
         assert_eq!(unsafe { XMemGetPhysicalMemoryLayout(&mut l) }, 1);
-        assert_eq!(l.size, f.total_bytes);
+        if compat_common::os_host::routes::current_build() == 19041 {
+            assert_eq!([l.base, l.size], compat_common::physical_pages::TITLE_LAYOUT_19041);
+        } else {
+            assert_eq!(l.size, f.total_bytes);
+        }
     }
 
     #[test]
