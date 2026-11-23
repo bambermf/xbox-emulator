@@ -149,6 +149,7 @@ pub(crate) fn record(what: &str, detail: &str) {
 
 #[derive(Clone, Copy)]
 pub struct XbtpFns {
+    pub session_io: fn() -> Option<SessionIo>,
     pub init_system: unsafe extern "C" fn() -> i32,
     pub create: unsafe extern "C" fn() -> *mut u8,
     pub listen: unsafe extern "C" fn(*mut u8, *mut c_void, u16, *mut Handle) -> i32,
@@ -178,6 +179,7 @@ fn load_xbtp() -> Option<XbtpFns> {
             return None;
         }
         Some(XbtpFns {
+            session_io: load_session_io,
             init_system: core::mem::transmute::<usize, unsafe extern "C" fn() -> i32>(i),
             create: core::mem::transmute::<usize, unsafe extern "C" fn() -> *mut u8>(c),
             listen: core::mem::transmute::<usize, unsafe extern "C" fn(*mut u8, *mut c_void, u16, *mut Handle) -> i32>(l),
@@ -384,7 +386,7 @@ pub struct Transport {
 }
 
 impl Transport {
-    const fn new() -> Transport {
+    pub const fn new() -> Transport {
         Transport { cs: Mutex::new(()), cancelled: AtomicU32::new(0), connected: AtomicU32::new(0), mode: AtomicU32::new(0), kind: AtomicU32::new(0), link: Mutex::new(None), accepted: AtomicUsize::new(0) }
     }
 
@@ -445,7 +447,88 @@ unsafe fn xbtp_listen_accept(x: &XbtpFns, link: &mut XbtpLink, service: u16, tim
     }
 }
 
-unsafe fn connect(t: &Transport) -> i32 {
+#[repr(C)]
+pub struct SendBuffer {
+    pub len: u32,
+    pub data: *const u8,
+}
+
+type RecvFn = unsafe extern "C" fn(*mut u8, *mut u8, u32, *mut u32, u32, *mut c_void) -> i32;
+type SendFn = unsafe extern "C" fn(*mut u8, *const SendBuffer, u32, *mut u32, u32, *mut c_void) -> i32;
+
+#[derive(Clone, Copy)]
+pub struct SessionIo {
+    pub recv: RecvFn,
+    pub send: SendFn,
+}
+
+fn load_session_io() -> Option<SessionIo> {
+    unsafe {
+        let module = GetModuleHandleW(wide("xbtp.dll").as_ptr());
+        if module == 0 { return None; }
+        let recv = GetProcAddress(module, b"XbtpLinkRecv\0".as_ptr());
+        let send = GetProcAddress(module, b"XbtpLinkSend\0".as_ptr());
+        if recv == 0 || send == 0 { return None; }
+        Some(SessionIo {
+            recv: core::mem::transmute::<usize, RecvFn>(recv),
+            send: core::mem::transmute::<usize, SendFn>(send),
+        })
+    }
+}
+
+struct AcceptedLink {
+    handle: *mut u8,
+    io: SessionIo,
+}
+
+impl std::io::Read for AcceptedLink {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let len = out.len().min(u32::MAX as usize) as u32;
+        let mut received = 0;
+        let hr = unsafe { (self.io.recv)(self.handle, out.as_mut_ptr(), len, &mut received, 0, core::ptr::null_mut()) };
+        if hr < 0 || received > len {
+            return Err(std::io::Error::other(format!("XBTP receive returned {hr:#x}, {received} bytes")));
+        }
+        Ok(received as usize)
+    }
+}
+
+impl std::io::Write for AcceptedLink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let buffer = SendBuffer { len: bytes.len().min(0x100_0000) as u32, data: bytes.as_ptr() };
+        let mut sent = 0;
+        let hr = unsafe { (self.io.send)(self.handle, &buffer, 1, &mut sent, 0, core::ptr::null_mut()) };
+        if hr < 0 || sent < 0x80 || sent - 0x80 > buffer.len {
+            return Err(std::io::Error::other(format!("XBTP send returned {hr:#x}, {sent} bytes")));
+        }
+        Ok((sent - 0x80) as usize)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+unsafe fn accepted_device_session(handle: *mut u8, init_flags: u32, io: impl FnOnce() -> Option<SessionIo>) -> i32 {
+    if compat_common::os_host::routes::current_build() != 19041 {
+        record("device engine", "a PIX tool connected on xbtp service 0x1080; the session setup 0x3a790 and the device-engine request dispatch 0x1b4e7 are not ported, so the connection is closed");
+        return E_NOTIMPL;
+    }
+    if handle.is_null() || handle.cast::<usize>().read_unaligned() & 0xffff_0000_0000 != 0x4c44_0000_0000 {
+        record("device engine", "build 19041 PIX sessions require an in-process XBTP device");
+        return E_NOTIMPL;
+    }
+    let Some(io) = io() else { return E_FAIL };
+    let wire = AcceptedLink { handle, io };
+    let mut session = super::transport_stream::Messages::new(wire, TRANSPORT[12] as usize, TRANSPORT[3] as usize);
+    match session.serve_19041(init_flags) {
+        Ok(()) => 0x8007_04cdu32 as i32,
+        Err(error) => {
+            record("device engine", &format!("PIX device session ended: {error}"));
+            if error.kind() == std::io::ErrorKind::Unsupported { E_NOTIMPL } else { E_FAIL }
+        }
+    }
+}
+
+pub unsafe fn run_device_connection(t: &Transport, init_flags: u32) -> i32 {
     let g = lock(&t.cs);
     if t.cancelled.load(Ordering::SeqCst) != 0 {
         return HR_CANCELLED;
@@ -479,19 +562,18 @@ unsafe fn connect(t: &Transport) -> i32 {
     QueryPerformanceCounter(&mut q);
     let mut link = XbtpLink { cancel, listener: 0, ready: 0, accepted: 0 };
     let hr = xbtp_listen_accept(&x, &mut link, TRANSPORT[1] as u16, TRANSPORT[2]);
-    let _g = lock(&t.cs);
     if hr < 0 {
+        let _g = lock(&t.cs);
         *lock(&t.link) = None;
         return hr;
     }
     t.accepted.store(link.accepted, Ordering::SeqCst);
-    record(
-        "device engine",
-        "a PIX tool connected on xbtp service 0x1080; the session setup 0x3a790 and the device-engine request dispatch 0x1b4e7 are not ported, so the connection is closed",
-    );
+    let result = accepted_device_session(link.accepted as *mut u8, init_flags, x.session_io);
+    let _g = lock(&t.cs);
+    t.accepted.store(0, Ordering::SeqCst);
     (x.close)(link.accepted as *mut u8);
     *lock(&t.link) = None;
-    E_NOTIMPL
+    result
 }
 
 pub struct Runtime {
@@ -530,7 +612,7 @@ unsafe extern "system" fn device_thread(p: *mut c_void) -> u32 {
         if WaitForSingleObject(rt.shutdown, 0) == 0 {
             return 0;
         }
-        let hr = connect(&rt.device);
+        let hr = run_device_connection(&rt.device, u32::from(rt.flag));
         if hr >= 0 {
             SetEvent(rt.connected);
             continue;
