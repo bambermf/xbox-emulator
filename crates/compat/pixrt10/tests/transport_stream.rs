@@ -121,7 +121,12 @@ fn version_query_round_trip_matches_the_19041_reply() {
         assert_ne!(handles[0], 0);
         assert_eq!(handles[1], 0);
         assert_ne!(handles[2], 0);
-        let client = std::thread::spawn(|| {
+        for _ in 0..2 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while rt.device.accepted.load(std::sync::atomic::Ordering::SeqCst) != 0 || xbtp::link_dev::pending_recvs(0x1080) == 0 {
+                assert!(std::time::Instant::now() < deadline, "device worker did not return to accept");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             let mut peer = Link(XbtpLinkCreateHandle());
             let mut addr = [0u8; 16];
             addr[0] = 2;
@@ -140,7 +145,6 @@ fn version_query_round_trip_matches_the_19041_reply() {
             let expected = [84u32, 0x7654_3210, 0, 0x1020_3040, 0x4000_051a, 0, 14, 1, 2, 3, 4, 1306, 0, 0x4a61_0f6c, 0, 0x31064, 0, 1, 1, 1, 1];
             let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(expected));
-        });
-        client.join().unwrap();
+        }
     }
 }
