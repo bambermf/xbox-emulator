@@ -233,6 +233,16 @@ fn from_title_builds_the_runtime_once_listens_on_0x1080_and_idles() {
 }
 
 #[test]
+fn worker_affinity_19041_uses_processor_six() {
+    for (process, expected) in [(0, 0x30), (0x3f, 0x30), (0x40, 0x60), (0x7f, 0x60), (0x80, 0x30), (0xff, 0x60), (0x10000, 0x30), (0x10040, 0x60)] {
+        assert_eq!(affinity_mask_for_build(19041, process), expected);
+        for build in [22000, 22621] {
+            assert_eq!(affinity_mask_for_build(build, process), affinity_mask(process));
+        }
+    }
+}
+
+#[test]
 fn affinity_and_layouts_follow_the_console() {
     assert_eq!(affinity_mask(0xff), AFFINITY_WIDE);
     assert_eq!(affinity_mask(0x80), AFFINITY_WIDE);

@@ -325,6 +325,14 @@ fn create_pix_dir() -> bool {
     }
 }
 
+pub fn affinity_mask_for_build(build: u32, process_mask: usize) -> usize {
+    if build == 19041 {
+        if process_mask & 0x40 == 0 { 0x30 } else { 0x60 }
+    } else {
+        affinity_mask(process_mask)
+    }
+}
+
 pub fn affinity_mask(process_mask: usize) -> usize {
     if process_mask > AFFINITY_SPLIT {
         AFFINITY_WIDE
@@ -339,7 +347,7 @@ pub(crate) unsafe fn pin_thread() -> usize {
     if !ok {
         record("thread affinity", "PixRT::GetMinimalTitleImpactProcessorAffinityMask - GetProcessAffinityMask call failed");
     }
-    let m = affinity_mask(p);
+    let m = affinity_mask_for_build(compat_common::os_host::routes::current_build(), p);
     SetThreadAffinityMask(GetCurrentThread(), m);
     m
 }
