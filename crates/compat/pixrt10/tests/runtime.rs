@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use xbtp::link_dev;
 
 extern "system" {
+    fn SetEvent(h: usize) -> i32;
     fn QueryThreadCycleTime(h: usize, c: *mut u64) -> i32;
     fn GetThreadDescription(h: usize, out: *mut *mut u16) -> i32;
     fn LocalFree(p: *mut c_void) -> *mut c_void;
@@ -229,6 +230,15 @@ fn from_title_builds_the_runtime_once_listens_on_0x1080_and_idles() {
         for &h in &hs {
             assert_eq!(WaitForSingleObject(h, 0), 0x102);
         }
+        assert_ne!(SetEvent(rt.device.cancel_event()), 0);
+        assert!(wait_until(|| rt.device.cancel_event() == 0));
+        assert_eq!(listener_refs(0x1080), 0);
+        assert!(!link_dev::listening(0x1080));
+        let replacement = xbtp::link::XbtpLinkCreateHandle();
+        assert!(!replacement.is_null());
+        let mut ready = core::ptr::null_mut();
+        assert_eq!(xbtp::link::XbtpLinkListen(replacement, core::ptr::null_mut(), 0x1080, &mut ready), 0);
+        xbtp::link::XbtpLinkCloseHandle(replacement);
     }
 }
 

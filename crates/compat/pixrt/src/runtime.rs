@@ -445,6 +445,17 @@ unsafe fn xbtp_listen_accept(x: &XbtpFns, link: &mut XbtpLink, service: u16, tim
     }
 }
 
+unsafe fn release_listener(x: &XbtpFns, handle: usize) {
+    let mut listeners = lock(&LISTENERS);
+    let index = listeners.iter().position(|l| l.handle == handle).expect("acquired PIX listener");
+    listeners[index].refs -= 1;
+    if listeners[index].refs == 0 {
+        let listener = listeners.swap_remove(index);
+        (x.close)(listener.handle as *mut u8);
+    }
+    mirror_refs(&listeners);
+}
+
 unsafe fn connect(t: &Transport) -> i32 {
     let g = lock(&t.cs);
     if t.cancelled.load(Ordering::SeqCst) != 0 {
@@ -474,24 +485,34 @@ unsafe fn connect(t: &Transport) -> i32 {
         return hr;
     }
     let cancel = CreateEventW(core::ptr::null_mut(), 0, 0, core::ptr::null());
+    if cancel == 0 {
+        let hr = hr_from_win32(GetLastError());
+        *lock(&SYSTEM_REFS) -= 1;
+        return hr;
+    }
     *lock(&t.link) = Some(XbtpLink { cancel, listener: 0, ready: 0, accepted: 0 });
     drop(g);
     QueryPerformanceCounter(&mut q);
     let mut link = XbtpLink { cancel, listener: 0, ready: 0, accepted: 0 };
     let hr = xbtp_listen_accept(&x, &mut link, TRANSPORT[1] as u16, TRANSPORT[2]);
     let _g = lock(&t.cs);
-    if hr < 0 {
-        *lock(&t.link) = None;
-        return hr;
+    if hr >= 0 {
+        t.accepted.store(link.accepted, Ordering::SeqCst);
+        record(
+            "device engine",
+            "a PIX tool connected on xbtp service 0x1080; the session setup 0x3a790 and the device-engine request dispatch 0x1b4e7 are not ported, so the connection is closed",
+        );
+        t.accepted.store(0, Ordering::SeqCst);
+        (x.close)(link.accepted as *mut u8);
     }
-    t.accepted.store(link.accepted, Ordering::SeqCst);
-    record(
-        "device engine",
-        "a PIX tool connected on xbtp service 0x1080; the session setup 0x3a790 and the device-engine request dispatch 0x1b4e7 are not ported, so the connection is closed",
-    );
-    (x.close)(link.accepted as *mut u8);
-    *lock(&t.link) = None;
-    E_NOTIMPL
+    if link.listener != 0 {
+        release_listener(&x, link.listener);
+    }
+    *lock(&SYSTEM_REFS) -= 1;
+    let mut published = lock(&t.link);
+    *published = None;
+    CloseHandle(cancel);
+    if hr < 0 { hr } else { E_NOTIMPL }
 }
 
 pub struct Runtime {
