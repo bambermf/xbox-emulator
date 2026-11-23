@@ -4,6 +4,18 @@ use std::io::{self, Read, Write};
 use std::ptr::null_mut;
 use xbtp::link::*;
 
+extern "system" {
+    fn SetEvent(handle: usize) -> i32;
+}
+
+fn wait_until(condition: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !condition() {
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the PIX worker");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 struct Link(*mut u8);
 
 impl Drop for Link {
@@ -121,12 +133,9 @@ fn version_query_round_trip_matches_the_19041_reply() {
         assert_ne!(handles[0], 0);
         assert_eq!(handles[1], 0);
         assert_ne!(handles[2], 0);
+        let awaiting_peer = || rt.device.accepted.load(std::sync::atomic::Ordering::SeqCst) == 0 && xbtp::link_dev::pending_recvs(0x1080) != 0;
         for _ in 0..2 {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while rt.device.accepted.load(std::sync::atomic::Ordering::SeqCst) != 0 || xbtp::link_dev::pending_recvs(0x1080) == 0 {
-                assert!(std::time::Instant::now() < deadline, "device worker did not return to accept");
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            wait_until(awaiting_peer);
             let mut peer = Link(XbtpLinkCreateHandle());
             let mut addr = [0u8; 16];
             addr[0] = 2;
@@ -146,5 +155,13 @@ fn version_query_round_trip_matches_the_19041_reply() {
             let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(expected));
         }
+        wait_until(awaiting_peer);
+        assert_ne!(SetEvent(rt.device.cancel_event()), 0);
+        wait_until(|| rt.device.cancel_event() == 0);
+        assert_eq!(pixrt10::runtime::listener_refs(0x1080), 0);
+        assert!(!xbtp::link_dev::listening(0x1080));
+        let replacement = Link(XbtpLinkCreateHandle());
+        let mut ready = null_mut();
+        assert_eq!(XbtpLinkListen(replacement.0, null_mut(), 0x1080, &mut ready), 0);
     }
 }
