@@ -240,8 +240,14 @@ pub fn sop1(op: u32) -> Option<&'static str> {
         0x1f => "s_getpc_b64", 0x20 => "s_setpc_b64", 0x21 => "s_swappc_b64",
         0x24 => "s_and_saveexec_b64", 0x25 => "s_or_saveexec_b64", 0x26 => "s_xor_saveexec_b64",
         0x27 => "s_andn2_saveexec_b64", 0x28 => "s_orn2_saveexec_b64", 0x29 => "s_nand_saveexec_b64",
+        0x2a => "s_nor_saveexec_b64", 0x2b => "s_xnor_saveexec_b64",
         0x34 => "s_abs_i32", 0x37 => "s_andn1_saveexec_b64", 0x3c => "s_and_saveexec_b32",
         0x3d => "s_or_saveexec_b32", 0x3e => "s_xor_saveexec_b32", 0x3f => "s_andn2_saveexec_b32",
+        0x41 => "s_nand_saveexec_b32",
+        0x42 => "s_nor_saveexec_b32",
+        0x43 => "s_xnor_saveexec_b32",
+        0x44 => "s_andn1_saveexec_b32",
+        0x45 => "s_orn1_saveexec_b32",
         _ => return None,
     })
 }

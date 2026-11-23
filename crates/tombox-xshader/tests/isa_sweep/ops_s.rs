@@ -341,7 +341,7 @@ pub fn add(s: &mut Suite) {
     sop1_ops(s);
     sopk_ops(s);
     sopc_ops(s);
-    for m in ["s_and_saveexec_b64", "s_or_saveexec_b64", "s_xor_saveexec_b64", "s_andn2_saveexec_b64", "s_orn2_saveexec_b64", "s_nand_saveexec_b64", "s_andn1_saveexec_b64", "s_orn1_saveexec_b64", "s_and_saveexec_b32", "s_or_saveexec_b32", "s_xor_saveexec_b32", "s_andn2_saveexec_b32", "s_orn2_saveexec_b32"] {
+    for m in ["s_and_saveexec_b64", "s_or_saveexec_b64", "s_xor_saveexec_b64", "s_andn2_saveexec_b64", "s_orn2_saveexec_b64", "s_nand_saveexec_b64", "s_andn1_saveexec_b64", "s_orn1_saveexec_b64", "s_and_saveexec_b32", "s_or_saveexec_b32", "s_xor_saveexec_b32", "s_andn2_saveexec_b32", "s_orn2_saveexec_b32", "s_nor_saveexec_b64", "s_xnor_saveexec_b64", "s_nand_saveexec_b32", "s_nor_saveexec_b32", "s_xnor_saveexec_b32", "s_andn1_saveexec_b32", "s_orn1_saveexec_b32"] {
         s.skip(m, "SOP1", "wave-level EXEC/SCC semantics; covered by tests/exec.rs scalar_saveexec_lane_model");
     }
     for m in ["s_getpc_b64", "s_setpc_b64", "s_swappc_b64"] {

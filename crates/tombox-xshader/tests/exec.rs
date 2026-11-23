@@ -992,7 +992,7 @@ fn wqm_of_exec_keeps_only_the_lane_bit_so_mask_loops_end() {
 #[test]
 fn scalar_saveexec_lane_model() {
     let mut c = Cases::new();
-    let ops: [(&'static str, u32, fn(u32, u32) -> u32); 11] = [
+    let ops: [(&'static str, u32, fn(u32, u32) -> u32); 18] = [
         ("s_and_saveexec_b32", 0x3c, |a, e| a & e),
         ("s_or_saveexec_b32", 0x3d, |a, e| a | e),
         ("s_xor_saveexec_b32", 0x3e, |a, e| a ^ e),
@@ -1004,6 +1004,13 @@ fn scalar_saveexec_lane_model() {
         ("s_orn2_saveexec_b64", 0x28, |a, e| a | !e),
         ("s_andn1_saveexec_b64", 0x37, |a, e| !a & e),
         ("s_orn1_saveexec_b64", 0x38, |a, e| !a | e),
+        ("s_nor_saveexec_b64", 0x2a, |a, e| !(a | e)),
+        ("s_xnor_saveexec_b64", 0x2b, |a, e| !(a ^ e)),
+        ("s_nand_saveexec_b32", 0x41, |a, e| !(a & e)),
+        ("s_nor_saveexec_b32", 0x42, |a, e| !(a | e)),
+        ("s_xnor_saveexec_b32", 0x43, |a, e| !(a ^ e)),
+        ("s_andn1_saveexec_b32", 0x44, |a, e| !a & e),
+        ("s_orn1_saveexec_b32", 0x45, |a, e| !a | e),
     ];
     for (m, op, f) in ops {
         for a in [0u32, 1, 0xffff_fffe, 0xffff_ffff] {
