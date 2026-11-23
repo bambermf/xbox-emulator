@@ -56,6 +56,15 @@ pub struct Layout {
     pub slots: [u32; SLOTS],
 }
 
+pub const LAYOUT_19041: Layout = Layout {
+    build: "19041",
+    from_title: 0x19fc0,
+    singleton_bytes: 0xae8,
+    runtime_bytes: 0x9d0,
+    runtime_ctor: 0x12cd0,
+    slots: [0x19930, 0x19950, 0x19220, 0x19a40, 0x19a70, 0x19ab0, 0x19a60, 0x19240, 0x19b00, 0x19c40, 0x19dc0, 0x19f40, 0x19f60, 0x19f80, 0x19fa0],
+};
+
 pub const LAYOUT_22000: Layout = Layout {
     build: "22000 (XDefiant, Terraria)",
     from_title: 0x234a0,
@@ -76,6 +85,7 @@ pub const LAYOUT_22621: Layout = Layout {
 
 pub fn layout(os_build: u32) -> Option<Layout> {
     match os_build {
+        19041 => Some(LAYOUT_19041),
         22621.. => Some(LAYOUT_22621),
         22000.. => Some(LAYOUT_22000),
         _ => None,
@@ -585,6 +595,7 @@ pub unsafe fn run_device_connection(t: &Transport, init_flags: u32) -> i32 {
 }
 
 pub struct Runtime {
+    legacy_workers: bool,
     pub block: usize,
     pub magic: u32,
     pub version: u32,
@@ -622,7 +633,9 @@ unsafe extern "system" fn device_thread(p: *mut c_void) -> u32 {
         }
         let hr = run_device_connection(&rt.device, u32::from(rt.flag));
         if hr >= 0 {
-            SetEvent(rt.connected);
+            if !rt.legacy_workers {
+                SetEvent(rt.connected);
+            }
             continue;
         }
         if WaitForSingleObject(rt.shutdown, 0) == 0 {
@@ -651,6 +664,13 @@ unsafe extern "system" fn notification_thread(p: *mut c_void) -> u32 {
     let rt = &*(p as *const Runtime);
     rt.affinity[2].store(pin_thread(), Ordering::SeqCst);
     rt.started[2].store(true, Ordering::SeqCst);
+    if rt.legacy_workers {
+        let events = [rt.notify, rt.connected, rt.shutdown];
+        while WaitForMultipleObjects(3, events.as_ptr(), 0, u32::MAX) < 2 {
+            record("notification", "19041 capture notifications are not ported");
+        }
+        return 0;
+    }
     let w = [rt.notify, rt.shutdown];
     while WaitForMultipleObjects(2, w.as_ptr(), 0, u32::MAX) == 0 {
         record("notification", "notification event signalled; the notification send 0x1ad0c is not ported");
@@ -663,7 +683,8 @@ pub(crate) unsafe fn runtime_new(layout: &Layout, magic: u32, version: u32, flag
     if block == 0 {
         return None;
     }
-    let connected = CreateEventW(core::ptr::null_mut(), 1, 0, core::ptr::null());
+    let legacy_workers = *layout == LAYOUT_19041;
+    let connected = CreateEventW(core::ptr::null_mut(), i32::from(!legacy_workers), 0, core::ptr::null());
     let pix_dir_created = create_pix_dir();
     let c = context();
     *lock(&c.pix_dir) = PIX_DIR.to_string();
@@ -672,6 +693,7 @@ pub(crate) unsafe fn runtime_new(layout: &Layout, magic: u32, version: u32, flag
     let shutdown = CreateEventW(core::ptr::null_mut(), 1, 0, core::ptr::null());
     let notify = CreateEventW(core::ptr::null_mut(), 0, 0, core::ptr::null());
     let rt: &'static Runtime = Box::leak(Box::new(Runtime {
+        legacy_workers,
         block,
         magic,
         version,
@@ -697,10 +719,14 @@ pub(crate) unsafe fn runtime_new(layout: &Layout, magic: u32, version: u32, flag
     set_capture_interface(rt as *const Runtime as usize + 8, 0);
     let procs: [ThreadProc; 3] = [device_thread, capture_thread, notification_thread];
     for (i, f) in procs.into_iter().enumerate() {
+        if legacy_workers && i == 1 {
+            continue;
+        }
         let h = CreateThread(core::ptr::null_mut(), 0, f, rt as *const Runtime as *mut c_void, 0, core::ptr::null_mut());
         rt.threads[i].store(h, Ordering::SeqCst);
         if h != 0 {
-            SetThreadDescription(h, wide(THREAD_NAMES[i]).as_ptr());
+            let name = if legacy_workers && i == 0 { "PIX::InteractiveRuntime(engine request)" } else { THREAD_NAMES[i] };
+            SetThreadDescription(h, wide(name).as_ptr());
         }
     }
     Some(rt)
@@ -821,16 +847,23 @@ pub fn runtime() -> Option<&'static Runtime> {
 unsafe fn ensure_runtime(s: &Singleton, magic: u32, version: u32, flags: u32) -> i32 {
     let mut r = lock(&s.runtime);
     if r.is_none() && !s.constructing.load(Ordering::SeqCst) {
+        if s.layout == LAYOUT_19041 && flags & 1 == 0 && console_sandbox::fs::drive_dir('D').join("PIX_ForceTCP").exists() {
+            record("PixDllInitializeFromTitle", "19041 requested the unsupported TCP transport");
+            return E_NOTIMPL;
+        }
         s.constructing.store(true, Ordering::SeqCst);
         *r = runtime_new(&s.layout, magic, version, flags);
         s.constructing.store(false, Ordering::SeqCst);
+        if r.is_none() && s.layout == LAYOUT_19041 {
+            return E_OUTOFMEMORY;
+        }
     }
     S_OK
 }
 
 pub unsafe extern "system" fn from_title(magic: u32, version: u32, flags: u32, table: *mut c_void, bytes: u32) -> i32 {
     let Some(layout) = layout(os_build()) else {
-        record("PixDllInitializeFromTitle", "this console build's pixrt10 (19041: 0xae8-byte singleton, two-thread runtime, d:\\PIX_ForceTCP) is not ported");
+        record("PixDllInitializeFromTitle", "this console build's pixrt10 title initializer is not ported");
         return E_NOTIMPL;
     };
     context();

@@ -262,7 +262,7 @@ fn affinity_and_layouts_follow_the_console() {
     assert_eq!(layout(22000), Some(LAYOUT_22000));
     assert_eq!(layout(22620), Some(LAYOUT_22000));
     assert_eq!(layout(22621), Some(LAYOUT_22621));
-    assert_eq!(layout(19041), None);
+    assert_eq!(layout(19041), Some(LAYOUT_19041));
     assert_eq!(TABLE_BYTES, 0x78);
     for l in [LAYOUT_22000, LAYOUT_22621] {
         assert!(l.slots.windows(2).all(|w| w[0] != w[1]));

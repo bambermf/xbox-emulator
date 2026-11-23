@@ -94,7 +94,7 @@ fn version_query_round_trip_matches_the_19041_reply() {
         return;
     }
     unsafe {
-        use pixrt10::runtime::{bind_xbtp, run_device_connection, SessionIo, Transport, XbtpFns};
+        use pixrt10::runtime::{bind_xbtp, from_title, runtime, title_table, SessionIo, XbtpFns};
         assert!(bind_xbtp(XbtpFns {
             session_io: || Some(SessionIo { recv: link_recv, send: link_send }),
             init_system: XbtpLinkInitializeSystem,
@@ -103,6 +103,24 @@ fn version_query_round_trip_matches_the_19041_reply() {
             accept: XbtpLinkAccept,
             close: XbtpLinkCloseHandle,
         }));
+        let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("title_{}", std::process::id()));
+        std::env::set_var("TOMBOX_GDK_ROOT", &root);
+        let force_tcp = console_sandbox::fs::drive_dir('D').join("PIX_ForceTCP");
+        std::fs::create_dir_all(force_tcp.parent().unwrap()).unwrap();
+        std::fs::write(&force_tcp, []).unwrap();
+        let mut table = [usize::MAX; 16];
+        assert_eq!(from_title(1, 2, 0, table.as_mut_ptr().cast(), 120), pixrt10::E_NOTIMPL);
+        assert_eq!(table, [usize::MAX; 16]);
+        assert!(runtime().is_none());
+        std::fs::remove_file(force_tcp).unwrap();
+        assert_eq!(from_title(1, 2, 0, table.as_mut_ptr().cast(), 120), 0);
+        assert_eq!(table[..15], title_table());
+        assert_eq!(table[15], usize::MAX);
+        let rt = runtime().unwrap();
+        let handles = rt.threads.each_ref().map(|h| h.load(std::sync::atomic::Ordering::SeqCst));
+        assert_ne!(handles[0], 0);
+        assert_eq!(handles[1], 0);
+        assert_ne!(handles[2], 0);
         let client = std::thread::spawn(|| {
             let mut peer = Link(XbtpLinkCreateHandle());
             let mut addr = [0u8; 16];
@@ -123,8 +141,6 @@ fn version_query_round_trip_matches_the_19041_reply() {
             let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(expected));
         });
-        let result = run_device_connection(&Transport::new(), 0);
-        assert_eq!(result, 0x8007_04cdu32 as i32);
         client.join().unwrap();
     }
 }
