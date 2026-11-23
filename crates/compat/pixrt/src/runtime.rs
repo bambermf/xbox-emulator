@@ -553,6 +553,10 @@ unsafe fn accepted_device_session(handle: *mut u8, init_flags: u32, io: impl FnO
     let mut session = super::transport_stream::Messages::new(wire, TRANSPORT[12] as usize, TRANSPORT[3] as usize);
     match session.serve_19041(init_flags) {
         Ok(()) => S_OK,
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            record("device engine", "PIX peer disconnected during a message");
+            S_OK
+        }
         Err(error) => {
             record("device engine", &format!("PIX device session ended: {error}"));
             if error.kind() == std::io::ErrorKind::Unsupported { E_NOTIMPL } else { E_FAIL }

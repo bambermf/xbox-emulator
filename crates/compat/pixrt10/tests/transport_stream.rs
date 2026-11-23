@@ -2,6 +2,7 @@ use pixrt10::transport_stream;
 
 use std::io::{self, Read, Write};
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use xbtp::link::*;
 
 extern "system" {
@@ -82,8 +83,14 @@ impl Write for Link {
     }
 }
 
+static LISTENS: AtomicUsize = AtomicUsize::new(0);
+
 unsafe extern "C" fn link_listen(h: *mut u8, reserved: *mut core::ffi::c_void, service: u16, ready: *mut usize) -> i32 {
-    XbtpLinkListen(h, reserved, service, ready.cast())
+    let hr = XbtpLinkListen(h, reserved, service, ready.cast());
+    if hr >= 0 {
+        LISTENS.fetch_add(1, Ordering::SeqCst);
+    }
+    hr
 }
 
 unsafe extern "C" fn link_recv(h: *mut u8, buf: *mut u8, len: u32, got: *mut u32, flags: u32, ov: *mut core::ffi::c_void) -> i32 {
@@ -133,15 +140,20 @@ fn version_query_round_trip_matches_the_19041_reply() {
         assert_ne!(handles[0], 0);
         assert_eq!(handles[1], 0);
         assert_ne!(handles[2], 0);
-        let awaiting_peer = || rt.device.accepted.load(std::sync::atomic::Ordering::SeqCst) == 0 && xbtp::link_dev::pending_recvs(0x1080) != 0;
-        for _ in 0..2 {
-            wait_until(awaiting_peer);
+        let attempts = [Some(&[52u8, 0][..]), Some(&[52, 0, 0, 0, 44, 0, 0, 0, 44][..]), None, None];
+        for (index, truncated) in attempts.into_iter().enumerate() {
+            wait_until(|| LISTENS.load(Ordering::SeqCst) == index + 1);
             let mut peer = Link(XbtpLinkCreateHandle());
             let mut addr = [0u8; 16];
             addr[0] = 2;
             addr[2..4].copy_from_slice(&0x1080u16.to_be_bytes());
             addr[4..8].copy_from_slice(&[127, 0, 0, 1]);
             assert_eq!(XbtpLinkConnect(peer.0, addr.as_ptr(), 16, 5000), 0);
+            if let Some(prefix) = truncated {
+                wait_until(|| rt.device.accepted.load(std::sync::atomic::Ordering::SeqCst) != 0);
+                peer.write_all(prefix).unwrap();
+                continue;
+            }
             for opcode in [1200u32, 0xc000_042a, 0x4000_051a] {
                 for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, opcode, 0, 0, 1, 2, 3, 4] {
                     peer.write_all(&word.to_le_bytes()).unwrap();
@@ -155,7 +167,7 @@ fn version_query_round_trip_matches_the_19041_reply() {
             let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(expected));
         }
-        wait_until(awaiting_peer);
+        wait_until(|| LISTENS.load(Ordering::SeqCst) == attempts.len() + 1);
         assert_ne!(SetEvent(rt.device.cancel_event()), 0);
         wait_until(|| rt.device.cancel_event() == 0);
         assert_eq!(pixrt10::runtime::listener_refs(0x1080), 0);
