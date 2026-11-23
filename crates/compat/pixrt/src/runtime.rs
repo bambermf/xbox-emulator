@@ -465,6 +465,20 @@ unsafe fn xbtp_listen_accept(x: &XbtpFns, link: &mut XbtpLink, service: u16, tim
     }
 }
 
+unsafe fn release_listener(x: &XbtpFns, handle: usize) {
+    let mut listeners = lock(&LISTENERS);
+    let Some(index) = listeners.iter().position(|l| l.handle == handle) else {
+        record("device engine", "PIX listener was not found during release");
+        return;
+    };
+    listeners[index].refs -= 1;
+    if listeners[index].refs == 0 {
+        let listener = listeners.swap_remove(index);
+        (x.close)(listener.handle as *mut u8);
+    }
+    mirror_refs(&listeners);
+}
+
 #[repr(C)]
 pub struct SendBuffer {
     pub len: u32,
@@ -538,7 +552,7 @@ unsafe fn accepted_device_session(handle: *mut u8, init_flags: u32, io: impl FnO
     let wire = AcceptedLink { handle, io };
     let mut session = super::transport_stream::Messages::new(wire, TRANSPORT[12] as usize, TRANSPORT[3] as usize);
     match session.serve_19041(init_flags) {
-        Ok(()) => 0x8007_04cdu32 as i32,
+        Ok(()) => S_OK,
         Err(error) => {
             record("device engine", &format!("PIX device session ended: {error}"));
             if error.kind() == std::io::ErrorKind::Unsupported { E_NOTIMPL } else { E_FAIL }
@@ -575,22 +589,34 @@ pub unsafe fn run_device_connection(t: &Transport, init_flags: u32) -> i32 {
         return hr;
     }
     let cancel = CreateEventW(core::ptr::null_mut(), 0, 0, core::ptr::null());
+    if cancel == 0 {
+        let hr = hr_from_win32(GetLastError());
+        *lock(&SYSTEM_REFS) -= 1;
+        return hr;
+    }
     *lock(&t.link) = Some(XbtpLink { cancel, listener: 0, ready: 0, accepted: 0 });
     drop(g);
     QueryPerformanceCounter(&mut q);
     let mut link = XbtpLink { cancel, listener: 0, ready: 0, accepted: 0 };
     let hr = xbtp_listen_accept(&x, &mut link, TRANSPORT[1] as u16, TRANSPORT[2]);
-    if hr < 0 {
-        let _g = lock(&t.cs);
-        *lock(&t.link) = None;
-        return hr;
-    }
-    t.accepted.store(link.accepted, Ordering::SeqCst);
-    let result = accepted_device_session(link.accepted as *mut u8, init_flags, x.session_io);
+    let result = if hr >= 0 {
+        t.accepted.store(link.accepted, Ordering::SeqCst);
+        accepted_device_session(link.accepted as *mut u8, init_flags, x.session_io)
+    } else {
+        hr
+    };
     let _g = lock(&t.cs);
-    t.accepted.store(0, Ordering::SeqCst);
-    (x.close)(link.accepted as *mut u8);
-    *lock(&t.link) = None;
+    if hr >= 0 {
+        t.accepted.store(0, Ordering::SeqCst);
+        (x.close)(link.accepted as *mut u8);
+    }
+    if link.listener != 0 {
+        release_listener(&x, link.listener);
+    }
+    *lock(&SYSTEM_REFS) -= 1;
+    let mut published = lock(&t.link);
+    *published = None;
+    CloseHandle(cancel);
     result
 }
 

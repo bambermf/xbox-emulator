@@ -240,6 +240,14 @@ fn from_title_builds_the_runtime_once_listens_on_0x1080_and_idles() {
         assert_eq!(xbtp::link::XbtpLinkRecv(peer, &mut byte, 1, &mut received, 0, core::ptr::null_mut()), 0);
         assert_eq!(received, 0, "the 22000 worker closes the accepted link without a PIX session");
         xbtp::link::XbtpLinkCloseHandle(peer);
+        assert_eq!(listener_refs(0x1080), 0);
+        assert!(!link_dev::listening(0x1080));
+        let replacement = xbtp::link::XbtpLinkCreateHandle();
+        assert!(!replacement.is_null());
+        let mut ready = core::ptr::null_mut();
+        assert_eq!(xbtp::link::XbtpLinkListen(replacement, core::ptr::null_mut(), 0x1080, &mut ready), 0);
+        xbtp::link::XbtpLinkCloseHandle(replacement);
+
     }
 }
 
