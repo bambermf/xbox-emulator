@@ -1,4 +1,4 @@
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor, Read, Write};
 
 #[link(name = "ntdll")]
 extern "system" {
@@ -75,6 +75,40 @@ impl<R: Read> Messages<R> {
     }
 }
 
+impl<R: Write> Messages<R> {
+    pub(crate) fn reply_to_version_query_19041(&mut self, request: &[u8]) -> io::Result<()> {
+        if request.len() < 44 || request[..4] != (request.len() as u32).to_le_bytes() {
+            return Err(invalid("incomplete PIX version query"));
+        }
+        let opcode = u32::from_le_bytes([request[16], request[17], request[18], request[19]]);
+        if opcode & 0x3fff_ffff != 1306 {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported PIX request"));
+        }
+        let mut reply = [0u8; 84];
+        reply[..4].copy_from_slice(&84u32.to_le_bytes());
+        reply[4..8].copy_from_slice(&request[4..8]);
+        reply[12..20].copy_from_slice(&request[12..20]);
+        reply[24..28].copy_from_slice(&14u32.to_le_bytes());
+        reply[28..44].copy_from_slice(&request[28..44]);
+        reply[44..48].copy_from_slice(&1306u32.to_le_bytes());
+        reply[52..56].copy_from_slice(&0x4a61_0f6cu32.to_le_bytes());
+        reply[60..64].copy_from_slice(&0x31064u32.to_le_bytes());
+        for word in reply[68..].chunks_exact_mut(4) {
+            word.copy_from_slice(&1u32.to_le_bytes());
+        }
+        if self.block_capacity <= 8 || self.message_capacity < reply.len() {
+            return Err(invalid("PIX transport capacity too small for version reply"));
+        }
+        for payload in reply.chunks(self.block_capacity - 8) {
+            let size = payload.len() as u32;
+            self.wire.write_all(&(size + 8).to_le_bytes())?;
+            self.wire.write_all(&size.to_le_bytes())?;
+            self.wire.write_all(payload)?;
+        }
+        self.wire.flush()
+    }
+}
+
 impl<R: Read> Read for Messages<R> {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if out.is_empty() {
@@ -115,6 +149,17 @@ mod tests {
         assert_eq!(stream.next_message().unwrap(), Some(message.clone()));
         assert_eq!(stream.next_message().unwrap(), Some(message));
         assert!(stream.next_message().unwrap().is_none());
+    }
+
+    #[test]
+    fn rejected_requests_emit_no_reply() {
+        let mut session = Messages::new(Cursor::new(Vec::new()), 64, 128);
+        let mut query = [0u8; 44];
+        query[..4].copy_from_slice(&44u32.to_le_bytes());
+        assert_eq!(session.reply_to_version_query_19041(&query).unwrap_err().kind(), io::ErrorKind::Unsupported);
+        query[16..20].copy_from_slice(&1306u32.to_le_bytes());
+        assert_eq!(session.reply_to_version_query_19041(&query[..43]).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert!(session.wire.get_ref().is_empty());
     }
 
     #[test]

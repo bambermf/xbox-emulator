@@ -1,7 +1,7 @@
 #[path = "../../pixrt/src/transport_stream.rs"]
 mod transport_stream;
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::ptr::null_mut;
 use xbtp::link::*;
 
@@ -54,5 +54,50 @@ fn fragmented_xpress_message_arrives_on_an_accepted_xbtp_link() {
         assert_eq!(message[4..8], 0x1234u32.to_le_bytes());
         assert_eq!(message[12..], [b'A'; 35]);
         assert!(messages.next_message().unwrap().is_none());
+    }
+}
+
+impl Write for Link {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let buffer = WSABUF { len: bytes.len() as u32, buf: bytes.as_ptr().cast_mut() };
+        let mut sent = 0;
+        let hr = unsafe { XbtpLinkSend(self.0, &buffer, 1, &mut sent, 0, null_mut()) };
+        if hr < 0 { Err(io::Error::other(format!("XBTP send returned {hr:#x}"))) }
+        else { Ok(sent.saturating_sub(MSG_SIZE as u32) as usize) }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn version_query_round_trip_matches_the_19041_reply() {
+    unsafe {
+        let listener = Link(XbtpLinkCreateHandle());
+        let mut ready = null_mut();
+        assert_eq!(XbtpLinkListen(listener.0, null_mut(), 0x1085, &mut ready), 0);
+        let client = std::thread::spawn(|| {
+            let mut peer = Link(XbtpLinkCreateHandle());
+            let mut addr = [0u8; 16];
+            addr[0] = 2;
+            addr[2..4].copy_from_slice(&0x1085u16.to_be_bytes());
+            addr[4..8].copy_from_slice(&[127, 0, 0, 1]);
+            assert_eq!(XbtpLinkConnect(peer.0, addr.as_ptr(), 16, 5000), 0);
+            for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, 0x4000_051a, 0, 0, 1, 2, 3, 4] {
+                peer.write_all(&word.to_le_bytes()).unwrap();
+            }
+            let mut messages = transport_stream::Messages::new(peer, 64, 128);
+            let expected = [84u32, 0x7654_3210, 0, 0x1020_3040, 0x4000_051a, 0, 14, 1, 2, 3, 4, 1306, 0, 0x4a61_0f6c, 0, 0x31064, 0, 1, 1, 1, 1];
+            let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
+            assert_eq!(messages.next_message().unwrap(), Some(expected));
+        });
+        let mut accepted = null_mut();
+        assert_eq!(XbtpLinkAccept(listener.0, &mut accepted, 5000), 0);
+        let mut messages = transport_stream::Messages::new(Link(accepted), 64, 128);
+        let query = messages.next_message().unwrap().unwrap();
+        messages.reply_to_version_query_19041(&query).unwrap();
+        drop(messages);
+        client.join().unwrap();
     }
 }
