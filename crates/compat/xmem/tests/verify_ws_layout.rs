@@ -97,3 +97,37 @@ fn legacy_puts_internal_pool_bytes_at_0x24_like_console_2b44() {
     assert_ne!(d(&int, 0x48), 0);
     near(d(&old, 0x24), d(&int, 0x48));
 }
+
+#[test]
+fn legacy_free_page_query_writes_two_triples_through_the_dll_export() {
+    if std::env::var_os("XMEM_FREE_PAGE_TEST_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "legacy_free_page_query_writes_two_triples_through_the_dll_export"])
+            .env("XMEM_FREE_PAGE_TEST_CHILD", "1")
+            .env("TOMBOX_CONSOLE_OSBUILD", "19041")
+            .status().unwrap();
+        assert!(status.success());
+        return;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetNumaHighestNodeNumber(highest: *mut u32) -> i32;
+    }
+    let mut highest = 0;
+    assert_ne!(unsafe { GetNumaHighestNodeNumber(&mut highest) }, 0);
+    let query: unsafe extern "system" fn(*mut u64) -> i32 =
+        unsafe { core::mem::transmute(export(xmem(), c"XMemGetFreePageStatistics")) };
+    let mut words = [u64::MAX; 8];
+    let result = unsafe { query(words.as_mut_ptr().add(1)) };
+    if highest > 1 {
+        assert_eq!(result, 0);
+        assert_eq!(words, [u64::MAX; 8]);
+    } else {
+        assert_eq!(result, 1);
+        assert_eq!((words[0], words[7]), (u64::MAX, u64::MAX));
+        assert!(!words[1..7].contains(&u64::MAX));
+        if highest == 0 {
+            assert_eq!(words[1..4], words[4..7]);
+        }
+    }
+}

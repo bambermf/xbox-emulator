@@ -187,11 +187,64 @@ pub struct FreePageStatistics {
     pub tools_total_bytes: u64,
 }
 
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct PartitionNodePages {
+    total: u64,
+    counts: [[u64; 2]; 4],
+}
+
+impl PartitionNodePages {
+    fn free_pages(self) -> [u64; 3] {
+        let [small, medium, large, huge] = self.counts.map(|[a, b]| a.wrapping_add(b));
+        [small, medium, large.wrapping_add(huge << 9)]
+    }
+}
+
+const CURRENT_MEMORY_PARTITION: Handle = usize::MAX as Handle;
+const PARTITION_NODE_INFORMATION: u32 = 7;
+
+#[repr(C)]
+struct PartitionNodes {
+    count: u32,
+    reserved: u32,
+    nodes: *mut PartitionNodePages,
+}
+
+unsafe fn query_partition_pages(handle: Handle, two_nodes: bool, out: *mut [[u64; 3]; 2]) -> i32 {
+    let mut rows = [PartitionNodePages::default(); 2];
+    let mut query = PartitionNodes {
+        count: 1 + u32::from(two_nodes),
+        reserved: 0,
+        nodes: rows.as_mut_ptr(),
+    };
+    let status = crate::NtManagePartition(handle, core::ptr::null_mut(), PARTITION_NODE_INFORMATION, (&raw mut query).cast(), size_of::<PartitionNodes>() as u32);
+    if status < 0 {
+        SetLastError(RtlNtStatusToDosError(status));
+        return 0;
+    }
+    let first = rows[0].free_pages();
+    let second = if two_nodes { rows[1].free_pages() } else { first };
+    out.write_unaligned([first, second]);
+    1
+}
+
 #[no_mangle]
 pub unsafe extern "system" fn XMemGetFreePageStatistics(out: *mut FreePageStatistics) -> i32 {
     if out.is_null() {
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
+    }
+    if compat_common::os_host::routes::current_build() == 19041 {
+        let handle = match crate::partition(crate::PARTITION_TITLE as usize) {
+            crate::Partition::Real(handle, _) => handle as Handle,
+            crate::Partition::Process => CURRENT_MEMORY_PARTITION,
+            crate::Partition::Missing => {
+                SetLastError(crate::ERROR_PARTITION_NOT_FOUND);
+                return 0;
+            }
+        };
+        return query_partition_pages(handle, multi_node(), out.cast());
     }
     let sys = system_memory();
     *out = FreePageStatistics {
@@ -412,6 +465,20 @@ mod tests {
         assert_eq!(u64::from_le_bytes(v2[0x28..0x30].try_into().unwrap()), total);
         assert_eq!(u64::from_le_bytes(v2[0x30..0x38].try_into().unwrap()), used);
         assert!(used <= total);
+    }
+
+    #[test]
+    fn partition_page_counts_follow_the_19041_groups() {
+        let row = PartitionNodePages { total: 42, counts: [[1, 2], [3, 4], [5, 6], [7, 8]] };
+        assert_eq!(row.free_pages(), [3, 7, 11 + 15 * 512]);
+    }
+
+    #[test]
+    fn failed_partition_query_preserves_the_19041_output() {
+        let mut out = [[u64::MAX; 3]; 2];
+        assert_eq!(unsafe { query_partition_pages(core::ptr::null_mut(), false, &mut out) }, 0);
+        assert_eq!(unsafe { GetLastError() }, 6);
+        assert_eq!(out, [[u64::MAX; 3]; 2]);
     }
 
     #[test]
