@@ -784,6 +784,7 @@ pub fn extract_durango(
             .or_else(|| body(b).and_then(|x| crate::meta::parse_signature(b, x).ok()))
             .unwrap_or_default()
     };
+    let output_sig = container.output_signature(dxbc)?;
     Ok(crate::ShaderExtract {
         stage,
         shader_model,
@@ -796,11 +797,11 @@ pub fn extract_durango(
         psv_numthreads: if stage == crate::Stage::Compute { body(b"PSV0").and_then(crate::meta::parse_psv0_cs_threads) } else { None },
         isa_data: lowered.isa,
         has_input_sig: container.chunk(b"ISG1").is_some() || container.chunk(b"ISGN").is_some(),
-        has_output_sig: container.chunk(b"OSG1").is_some() || container.chunk(b"OSGN").is_some(),
+        has_output_sig: output_sig.is_some(),
         has_psv0: container.chunk(b"PSV0").is_some(),
         has_root_sig: container.chunk(b"RTS0").is_some(),
         input_sig: sig(b"ISG1", b"ISGN"),
-        output_sig: sig(b"OSG1", b"OSGN"),
+        output_sig: output_sig.unwrap_or_default(),
         prim_sig: Vec::new(),
         resources: body(b"PSV0").and_then(|b| crate::meta::parse_psv0(b).ok()).unwrap_or_default(),
         gs_info: body(b"PSV0").and_then(crate::meta::parse_psv0_gs),

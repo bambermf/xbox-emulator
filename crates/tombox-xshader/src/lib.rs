@@ -115,6 +115,22 @@ impl Dxbc {
     pub fn chunk(&self, fourcc: &[u8; 4]) -> Option<&Chunk> {
         self.chunks.iter().find(|c| c.fourcc == *fourcc)
     }
+
+    fn output_signature(&self, blob: &[u8]) -> Result<Option<Vec<meta::SigElement>>, String> {
+        let mut found = false;
+        for tag in [b"OSG1", b"OSG5", b"OSGN"] {
+            if let Some(chunk) = self.chunk(tag) {
+                found = true;
+                let body = &blob[chunk.offset..chunk.offset + chunk.size];
+                match meta::parse_signature(tag, body) {
+                    Ok(signature) => return Ok(Some(signature)),
+                    Err(error) if tag == b"OSG5" => return Err(error),
+                    Err(_) => continue,
+                }
+            }
+        }
+        Ok(found.then(Vec::new))
+    }
 }
 
 pub fn parse_root_signature(data: &[u8]) -> Result<meta::RootSig, String> {
@@ -300,6 +316,7 @@ pub fn extract(dxbc: &[u8]) -> Result<ShaderExtract, String> {
     let psv_numthreads = if stage == Stage::Compute { chunk_body(b"PSV0").and_then(meta::parse_psv0_cs_threads) } else { None };
     let mut gs_info = chunk_body(b"PSV0").and_then(meta::parse_psv0_gs);
     dxil_meta::fill_num_threads(&mut gs_info, || dxil_disassembly(dxbc))?;
+    let output_sig = container.output_signature(dxbc)?;
     Ok(ShaderExtract {
         stage,
         shader_model: sm,
@@ -312,15 +329,13 @@ pub fn extract(dxbc: &[u8]) -> Result<ShaderExtract, String> {
         isa_data,
         fssm,
         has_input_sig: container.chunk(b"ISG1").is_some() || container.chunk(b"ISGN").is_some(),
-        has_output_sig: container.chunk(b"OSG1").is_some() || container.chunk(b"OSGN").is_some(),
+        has_output_sig: output_sig.is_some(),
         has_psv0: container.chunk(b"PSV0").is_some(),
         has_root_sig: container.chunk(b"RTS0").is_some(),
         input_sig: chunk_body(b"ISG1").and_then(|b| meta::parse_signature(b"ISG1", b).ok())
             .or_else(|| chunk_body(b"ISGN").and_then(|b| meta::parse_signature(b"ISGN", b).ok()))
             .unwrap_or_default(),
-        output_sig: chunk_body(b"OSG1").and_then(|b| meta::parse_signature(b"OSG1", b).ok())
-            .or_else(|| chunk_body(b"OSGN").and_then(|b| meta::parse_signature(b"OSGN", b).ok()))
-            .unwrap_or_default(),
+        output_sig: output_sig.unwrap_or_default(),
         prim_sig: chunk_body(b"PSG1").and_then(|b| meta::parse_signature(b"PSG1", b).ok())
             .or_else(|| chunk_body(b"PSGN").and_then(|b| meta::parse_signature(b"PSGN", b).ok()))
             .unwrap_or_default(),
