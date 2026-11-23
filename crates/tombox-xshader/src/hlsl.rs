@@ -3693,6 +3693,19 @@ impl<'a> Emitter<'a> {
                         self.line(&format!("scc = ({} != 0u) ? 1u : 0u;", name(&d)?));
                         Ok(())
                     }
+                    "s_bitreplicate_b64_b32" => {
+                        let dh = hi(&d);
+                        self.touch(&dh);
+                        let t = self.tmp;
+                        self.tmp += 1;
+                        self.line(&format!("uint2 t{t} = uint2(({a}) & 0xffffu, ({a}) >> 16u);"));
+                        for (shift, mask) in [(8, "00ff00ff"), (4, "0f0f0f0f"), (2, "33333333"), (1, "55555555")] {
+                            self.line(&format!("t{t} = (t{t} | (t{t} << {shift}u)) & 0x{mask}u;"));
+                        }
+                        self.line(&format!("t{t} |= t{t} << 1u;"));
+                        self.ws(&d, &format!("t{t}.x"))?;
+                        self.ws(&dh, &format!("t{t}.y"))
+                    }
                     "s_brev_b64" | "s_bitset0_b64" | "s_bitset1_b64" => {
                         let dh = hi(&d);
                         self.touch(&d);

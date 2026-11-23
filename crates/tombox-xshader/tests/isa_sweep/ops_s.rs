@@ -237,6 +237,10 @@ fn sop1_ops(s: &mut Suite) {
         ("s_not_b64", 0x08, |a, _, _| (!a, Some(nz(!a)))),
         ("s_wqm_b64", 0x0a, |a, _, _| { let r = wqm(a, 64); (r, Some(nz(r))) }),
         ("s_brev_b64", 0x0c, |a, _, _| (a.reverse_bits(), None)),
+        ("s_bitreplicate_b64_b32", 0x3b, |a, _, _| {
+            let pairs = (0..32).fold(0, |out, bit| out | (((a >> bit) & 1) * 3 << (2 * bit)));
+            (pairs, None)
+        }),
         ("s_bitset0_b64", 0x1c, |a, d, _| (d & !(1u64 << (a & 63)), None)),
         ("s_bitset1_b64", 0x1e, |a, d, _| (d | (1u64 << (a & 63)), None)),
     ];
