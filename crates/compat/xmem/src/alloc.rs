@@ -297,6 +297,10 @@ pub unsafe extern "system" fn XMemGetAllocationStatistics(memory_type: u32, alt:
             o.allocation_count = if alt != 0 { 0 } else { s.count.load(Ordering::Relaxed) as u32 };
             o.released_pages = crate::pool::released(i);
         }
+        None if compat_common::gameinput_ext::default_os_build() == 19041 => {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
         None => {
             o.allocated_bytes = 0;
             o.cached_bytes = 0;
@@ -426,6 +430,33 @@ mod tests {
         assert_eq!(s.cached_bytes, 0);
         assert_eq!(s.released_pages, 2);
         assert_eq!(crate::pool::cached_count(11), 0);
+    }
+
+    #[test]
+    fn allocation_statistics_rejects_invalid_memory_types_on_19041() {
+        if std::env::var("TOMBOX_GI_OSBUILD").as_deref() != Ok("19041") {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "alloc::tests::allocation_statistics_rejects_invalid_memory_types_on_19041"])
+                .env("TOMBOX_GI_OSBUILD", "19041")
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        for (memory_type, alt, size, expected_error) in [
+            (16, 0, 32, ERROR_INVALID_PARAMETER),
+            (u32::MAX, 1, 32, ERROR_INVALID_PARAMETER),
+            (16, 0, 31, ERROR_BAD_LENGTH),
+        ] {
+            let mut words = [0xa5a5_a5a5_a5a5_a5a5u64; 4];
+            words[0] = (words[0] & !0xffff_ffff) | size;
+            let initial = words;
+            unsafe {
+                SetLastError(0);
+                assert_eq!(XMemGetAllocationStatistics(memory_type, alt, words.as_mut_ptr().cast()), 0);
+                assert_eq!(GetLastError(), expected_error);
+            }
+            assert_eq!(words, initial);
+        }
     }
 
     #[test]
