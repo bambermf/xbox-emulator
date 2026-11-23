@@ -447,7 +447,10 @@ unsafe fn xbtp_listen_accept(x: &XbtpFns, link: &mut XbtpLink, service: u16, tim
 
 unsafe fn release_listener(x: &XbtpFns, handle: usize) {
     let mut listeners = lock(&LISTENERS);
-    let index = listeners.iter().position(|l| l.handle == handle).expect("acquired PIX listener");
+    let Some(index) = listeners.iter().position(|l| l.handle == handle) else {
+        record("device engine", "PIX listener was not found during release");
+        return;
+    };
     listeners[index].refs -= 1;
     if listeners[index].refs == 0 {
         let listener = listeners.swap_remove(index);
