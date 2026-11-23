@@ -76,7 +76,7 @@ impl<R: Read> Messages<R> {
 }
 
 impl<R: Read + Write> Messages<R> {
-    pub fn serve_19041(&mut self, init_flags: u32) -> io::Result<()> {
+    pub(crate) fn serve_19041(&mut self, init_flags: u32) -> io::Result<()> {
         while let Some(request) = self.next_message()? {
             self.dispatch_19041(&request, init_flags)?;
         }
