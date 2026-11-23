@@ -154,7 +154,7 @@ fn version_query_round_trip_matches_the_19041_reply() {
                 peer.write_all(prefix).unwrap();
                 continue;
             }
-            for opcode in [1200u32, 36, 0x8000_04b4, 0xc000_042a, 0x4000_051a, 1305] {
+            for opcode in [1200u32, 1206, 36, 0x8000_04b4, 0xc000_042a, 0x4000_051a, 1305] {
                 for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, opcode, 0, 0, 1, 2, 3, 4] {
                     peer.write_all(&word.to_le_bytes()).unwrap();
                 }

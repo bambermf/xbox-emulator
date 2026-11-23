@@ -90,12 +90,12 @@ impl<R: Read + Write> Messages<R> {
         let opcode = u32::from_le_bytes([request[16], request[17], request[18], request[19]]) & 0x3fff_ffff;
         let mut storage = [0u8; 208];
         let (reply, status, reply_opcode): (&mut [u8], u32, u32) = match opcode {
-            1200..=1202 => return Ok(()),
+            1200..=1202 | 1206 => return Ok(()),
             1305 if init_flags & 1 != 0 => return Ok(()),
             1305 => (&mut storage, 0, opcode),
             1306 => (&mut storage[..84], 0, opcode),
             36 | 1204 => (&mut storage[..68], 0x8000_4005, 0),
-            1205..=1206 | 1300..=1303 | 1307 | 1308 | 1310 => {
+            1205 | 1300..=1303 | 1307 | 1308 | 1310 => {
                 return Err(io::Error::new(io::ErrorKind::Unsupported, "unimplemented PIX device request"));
             }
             _ if init_flags & 1 != 0 => return Ok(()),
