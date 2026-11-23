@@ -135,7 +135,64 @@ pub unsafe extern "system" fn XMemVirtualQuery(process: Handle, address: *const 
         flags: if mbi.partition_id == 0 { 1 } else { 0 },
         ..Default::default()
     };
+    if compat_common::os_host::routes::current_build() == 19041 {
+        (*out).region_size = 0;
+        (*out).flags = query_partition_flags(mbi.partition_id.into(), mbi.protect);
+        if mbi.protect != PAGE_NOACCESS {
+            if let Err(status) = query_page_attributes(process, mbi.alloc_base, &mut *out) {
+                SetLastError(RtlNtStatusToDosError(status));
+                return 0;
+            }
+        }
+        (*out).region_size = mbi.region_size;
+    }
     1
+}
+
+#[link(name = "ntdll", kind = "raw-dylib")]
+extern "system" {
+    fn NtQueryVirtualMemory(process: Handle, base: usize, class: u32, info: *mut c_void, bytes: usize, returned: *mut usize) -> i32;
+    fn RtlNtStatusToDosError(status: i32) -> u32;
+}
+
+unsafe fn query_partition_flags(partition: u32, protect: u32) -> u64 {
+    let matches = |index| {
+        let mut id = u32::MAX;
+        crate::XMemGetPartitionHandleAndId(index, core::ptr::null_mut(), &mut id) != 0 && partition == id
+    };
+    let mut flags = if protect & 0x1f800 != 0 { 3 } else { u64::from(matches(crate::PARTITION_TITLE)) };
+    if matches(crate::PARTITION_TOOLS) {
+        flags |= 0x11;
+    }
+    flags
+}
+
+unsafe fn query_page_attributes(process: Handle, base: usize, info: &mut XMemBasicInformation) -> Result<(), i32> {
+    if crate::stats::multi_node() || base & 0x1f_ffff == 0 {
+        let mut working_set = [base, 0];
+        let status = NtQueryVirtualMemory(process, 0, 4, working_set.as_mut_ptr().cast(), core::mem::size_of_val(&working_set), core::ptr::null_mut());
+        if status < 0 {
+            return Err(status);
+        }
+        if working_set[1] & 0x3f_0000 == 0x1_0000 {
+            info.flags |= 0x280;
+        }
+        if working_set[1] & (1 << 23) != 0 {
+            info.state |= XMEM_LARGE_PAGES;
+            return Ok(());
+        }
+    }
+    if base & 0xffff == 0 {
+        let mut region = [0u32; 12];
+        let status = NtQueryVirtualMemory(process, base, 7, region.as_mut_ptr().cast(), core::mem::size_of_val(&region), core::ptr::null_mut());
+        if status < 0 {
+            return Err(status);
+        }
+        if region[3] & 0x80 != 0 {
+            info.state |= XMEM_64K_PAGES;
+        }
+    }
+    Ok(())
 }
 
 pub static WRITE_WATCH_SUSPENDED: AtomicU32 = AtomicU32::new(0);
@@ -281,6 +338,14 @@ mod tests {
         assert_eq!(round_range(0, 1, 0x1_0000), (0, 0x1_0000));
         assert_eq!(round_range(0x1_2345, 0x10, 0x1_0000), (0x1_0000, 0x1_0000));
         assert_eq!(round_range(0x1_fff0, 0x20, 0x1_0000), (0x1_0000, 0x2_0000));
+    }
+
+    #[test]
+    fn region_query_reports_the_kernel_failure_for_an_unallocated_base() {
+        let mut info = XMemBasicInformation { state: MEM_COMMIT, ..Default::default() };
+        let status = unsafe { query_page_attributes(GetCurrentProcess(), 0, &mut info) };
+        assert_eq!(status, Err(0xc0000141u32 as i32));
+        assert_eq!(info.state, MEM_COMMIT);
     }
 
     #[test]
