@@ -154,18 +154,26 @@ fn version_query_round_trip_matches_the_19041_reply() {
                 peer.write_all(prefix).unwrap();
                 continue;
             }
-            for opcode in [1200u32, 0xc000_042a, 0x4000_051a] {
+            for opcode in [1200u32, 0xc000_042a, 0x4000_051a, 1305] {
                 for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, opcode, 0, 0, 1, 2, 3, 4] {
                     peer.write_all(&word.to_le_bytes()).unwrap();
                 }
             }
-            let mut messages = transport_stream::Messages::new(peer, 128, 128);
+            let mut messages = transport_stream::Messages::new(peer, 256, 256);
             let unsupported = [68u32, 0x7654_3210, 0, 0x1020_3040, 0xc000_042a, 0x8000_4001, 10, 1, 2, 3, 4, 0x42a, 0, 0, 0, 0, 0];
             let unsupported: Vec<u8> = unsupported.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(unsupported));
             let expected = [84u32, 0x7654_3210, 0, 0x1020_3040, 0x4000_051a, 0, 14, 1, 2, 3, 4, 1306, 0, 0x4a61_0f6c, 0, 0x31064, 0, 1, 1, 1, 1];
             let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(expected));
+            let build = messages.next_message().unwrap().unwrap();
+            assert_eq!(build.len(), 208);
+            let header: Vec<u32> = build[..68].chunks_exact(4)
+                .map(|word| u32::from_le_bytes(word.try_into().unwrap())).collect();
+            assert_eq!(header, [208, 0x7654_3210, 0, 0x1020_3040, 1305, 0, 45, 1, 2, 3, 4, 1305, 0, 0x4a61_0f6c, 0, 0x31064, 0]);
+            let labels: Vec<u16> = build[68..206].chunks_exact(2)
+                .map(|unit| u16::from_le_bytes(unit.try_into().unwrap())).collect();
+            assert_eq!(String::from_utf16(&labels).unwrap(), "August 2020 XDK QFE 4\0August 2020 QFE 4\0vb_release_xbox_dev_2008_gdk\0");
         }
         wait_until(|| LISTENS.load(Ordering::SeqCst) == attempts.len() + 1);
         assert_ne!(SetEvent(rt.device.cancel_event()), 0);

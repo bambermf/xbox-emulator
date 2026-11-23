@@ -88,11 +88,13 @@ impl<R: Read + Write> Messages<R> {
             return Err(invalid("incomplete PIX device request"));
         }
         let opcode = u32::from_le_bytes([request[16], request[17], request[18], request[19]]) & 0x3fff_ffff;
-        let mut storage = [0u8; 84];
+        let mut storage = [0u8; 208];
         let (reply, status): (&mut [u8], u32) = match opcode {
             1200..=1202 => return Ok(()),
-            1306 => (&mut storage, 0),
-            36 | 1204..=1206 | 1300..=1303 | 1305 | 1307 | 1308 | 1310 => {
+            1305 if init_flags & 1 != 0 => return Ok(()),
+            1305 => (&mut storage, 0),
+            1306 => (&mut storage[..84], 0),
+            36 | 1204..=1206 | 1300..=1303 | 1307 | 1308 | 1310 => {
                 return Err(io::Error::new(io::ErrorKind::Unsupported, "unimplemented PIX device request"));
             }
             _ if init_flags & 1 != 0 => return Ok(()),
@@ -109,9 +111,16 @@ impl<R: Read + Write> Messages<R> {
         reply[24..28].copy_from_slice(&((size - 28) / 4).to_le_bytes());
         reply[28..44].copy_from_slice(&request[28..44]);
         reply[44..48].copy_from_slice(&opcode.to_le_bytes());
-        if opcode == 1306 {
+        if matches!(opcode, 1305 | 1306) {
             reply[52..56].copy_from_slice(&0x4a61_0f6cu32.to_le_bytes());
             reply[60..64].copy_from_slice(&0x31064u32.to_le_bytes());
+        }
+        if opcode == 1305 {
+            let labels = "August 2020 XDK QFE 4\0August 2020 QFE 4\0vb_release_xbox_dev_2008_gdk\0";
+            for (dst, unit) in reply[68..].chunks_exact_mut(2).zip(labels.encode_utf16()) {
+                dst.copy_from_slice(&unit.to_le_bytes());
+            }
+        } else if opcode == 1306 {
             for word in reply[68..].chunks_exact_mut(4) {
                 word.copy_from_slice(&1u32.to_le_bytes());
             }
@@ -177,6 +186,8 @@ mod tests {
         let mut query = [0u8; 44];
         query[..4].copy_from_slice(&44u32.to_le_bytes());
         query[16..20].copy_from_slice(&1066u32.to_le_bytes());
+        session.dispatch_19041(&query, 1).unwrap();
+        query[16..20].copy_from_slice(&1305u32.to_le_bytes());
         session.dispatch_19041(&query, 1).unwrap();
         query[16..20].copy_from_slice(&1205u32.to_le_bytes());
         assert_eq!(session.dispatch_19041(&query, 0).unwrap_err().kind(), io::ErrorKind::Unsupported);
