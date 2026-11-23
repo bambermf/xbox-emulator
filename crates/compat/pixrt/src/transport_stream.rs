@@ -5,7 +5,7 @@ extern "system" {
     fn RtlDecompressBuffer(format: u16, out: *mut u8, capacity: u32, input: *const u8, len: u32, written: *mut u32) -> i32;
 }
 
-pub(crate) struct Messages<R> {
+pub struct Messages<R> {
     wire: R,
     block: Cursor<Vec<u8>>,
     block_capacity: usize,
@@ -31,7 +31,7 @@ fn size_header(reader: &mut impl Read) -> io::Result<Option<usize>> {
 }
 
 impl<R: Read> Messages<R> {
-    pub(crate) fn new(wire: R, block_capacity: usize, message_capacity: usize) -> Self {
+    pub fn new(wire: R, block_capacity: usize, message_capacity: usize) -> Self {
         Self { wire, block: Cursor::new(Vec::new()), block_capacity, message_capacity }
     }
 
@@ -63,7 +63,7 @@ impl<R: Read> Messages<R> {
         Ok(true)
     }
 
-    pub(crate) fn next_message(&mut self) -> io::Result<Option<Vec<u8>>> {
+    pub fn next_message(&mut self) -> io::Result<Option<Vec<u8>>> {
         let Some(total) = size_header(self)? else { return Ok(None) };
         if !(12..=self.message_capacity).contains(&total) {
             return Err(invalid("invalid PIX message length"));
@@ -75,29 +75,49 @@ impl<R: Read> Messages<R> {
     }
 }
 
-impl<R: Write> Messages<R> {
-    pub(crate) fn reply_to_version_query_19041(&mut self, request: &[u8]) -> io::Result<()> {
-        if request.len() < 44 || request[..4] != (request.len() as u32).to_le_bytes() {
-            return Err(invalid("incomplete PIX version query"));
+impl<R: Read + Write> Messages<R> {
+    pub fn serve_19041(&mut self, init_flags: u32) -> io::Result<()> {
+        while let Some(request) = self.next_message()? {
+            self.dispatch_19041(&request, init_flags)?;
         }
-        let opcode = u32::from_le_bytes([request[16], request[17], request[18], request[19]]);
-        if opcode & 0x3fff_ffff != 1306 {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported PIX request"));
+        Ok(())
+    }
+
+    fn dispatch_19041(&mut self, request: &[u8], init_flags: u32) -> io::Result<()> {
+        if request.len() < 28 || request[..4] != (request.len() as u32).to_le_bytes() {
+            return Err(invalid("incomplete PIX device request"));
         }
-        let mut reply = [0u8; 84];
-        reply[..4].copy_from_slice(&84u32.to_le_bytes());
+        let opcode = u32::from_le_bytes([request[16], request[17], request[18], request[19]]) & 0x3fff_ffff;
+        let mut storage = [0u8; 84];
+        let (reply, status): (&mut [u8], u32) = match opcode {
+            1200..=1202 => return Ok(()),
+            1306 => (&mut storage, 0),
+            36 | 1204..=1206 | 1300..=1303 | 1305 | 1307 | 1308 | 1310 => {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "unimplemented PIX device request"));
+            }
+            _ if init_flags & 1 != 0 => return Ok(()),
+            _ => (&mut storage[..68], 0x8000_4001),
+        };
+        if request.len() < 44 {
+            return Err(invalid("incomplete PIX request identifiers"));
+        }
+        let size = reply.len() as u32;
+        reply[..4].copy_from_slice(&size.to_le_bytes());
         reply[4..8].copy_from_slice(&request[4..8]);
         reply[12..20].copy_from_slice(&request[12..20]);
-        reply[24..28].copy_from_slice(&14u32.to_le_bytes());
+        reply[20..24].copy_from_slice(&status.to_le_bytes());
+        reply[24..28].copy_from_slice(&((size - 28) / 4).to_le_bytes());
         reply[28..44].copy_from_slice(&request[28..44]);
-        reply[44..48].copy_from_slice(&1306u32.to_le_bytes());
-        reply[52..56].copy_from_slice(&0x4a61_0f6cu32.to_le_bytes());
-        reply[60..64].copy_from_slice(&0x31064u32.to_le_bytes());
-        for word in reply[68..].chunks_exact_mut(4) {
-            word.copy_from_slice(&1u32.to_le_bytes());
+        reply[44..48].copy_from_slice(&opcode.to_le_bytes());
+        if opcode == 1306 {
+            reply[52..56].copy_from_slice(&0x4a61_0f6cu32.to_le_bytes());
+            reply[60..64].copy_from_slice(&0x31064u32.to_le_bytes());
+            for word in reply[68..].chunks_exact_mut(4) {
+                word.copy_from_slice(&1u32.to_le_bytes());
+            }
         }
         if self.block_capacity <= 8 || self.message_capacity < reply.len() {
-            return Err(invalid("PIX transport capacity too small for version reply"));
+            return Err(invalid("PIX transport capacity too small for device reply"));
         }
         for payload in reply.chunks(self.block_capacity - 8) {
             let size = payload.len() as u32;
@@ -156,9 +176,12 @@ mod tests {
         let mut session = Messages::new(Cursor::new(Vec::new()), 64, 128);
         let mut query = [0u8; 44];
         query[..4].copy_from_slice(&44u32.to_le_bytes());
-        assert_eq!(session.reply_to_version_query_19041(&query).unwrap_err().kind(), io::ErrorKind::Unsupported);
+        query[16..20].copy_from_slice(&1066u32.to_le_bytes());
+        session.dispatch_19041(&query, 1).unwrap();
+        query[16..20].copy_from_slice(&1205u32.to_le_bytes());
+        assert_eq!(session.dispatch_19041(&query, 0).unwrap_err().kind(), io::ErrorKind::Unsupported);
         query[16..20].copy_from_slice(&1306u32.to_le_bytes());
-        assert_eq!(session.reply_to_version_query_19041(&query[..43]).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(session.dispatch_19041(&query[..43], 0).unwrap_err().kind(), io::ErrorKind::InvalidData);
         assert!(session.wire.get_ref().is_empty());
     }
 

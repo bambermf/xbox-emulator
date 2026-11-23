@@ -1,5 +1,4 @@
-#[path = "../../pixrt/src/transport_stream.rs"]
-mod transport_stream;
+use pixrt10::transport_stream;
 
 use std::io::{self, Read, Write};
 use std::ptr::null_mut;
@@ -84,10 +83,15 @@ fn version_query_round_trip_matches_the_19041_reply() {
             addr[2..4].copy_from_slice(&0x1085u16.to_be_bytes());
             addr[4..8].copy_from_slice(&[127, 0, 0, 1]);
             assert_eq!(XbtpLinkConnect(peer.0, addr.as_ptr(), 16, 5000), 0);
-            for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, 0x4000_051a, 0, 0, 1, 2, 3, 4] {
-                peer.write_all(&word.to_le_bytes()).unwrap();
+            for opcode in [1200u32, 0xc000_042a, 0x4000_051a] {
+                for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, opcode, 0, 0, 1, 2, 3, 4] {
+                    peer.write_all(&word.to_le_bytes()).unwrap();
+                }
             }
             let mut messages = transport_stream::Messages::new(peer, 64, 128);
+            let unsupported = [68u32, 0x7654_3210, 0, 0x1020_3040, 0xc000_042a, 0x8000_4001, 10, 1, 2, 3, 4, 0x42a, 0, 0, 0, 0, 0];
+            let unsupported: Vec<u8> = unsupported.into_iter().flat_map(u32::to_le_bytes).collect();
+            assert_eq!(messages.next_message().unwrap(), Some(unsupported));
             let expected = [84u32, 0x7654_3210, 0, 0x1020_3040, 0x4000_051a, 0, 14, 1, 2, 3, 4, 1306, 0, 0x4a61_0f6c, 0, 0x31064, 0, 1, 1, 1, 1];
             let expected: Vec<u8> = expected.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(expected));
@@ -95,8 +99,7 @@ fn version_query_round_trip_matches_the_19041_reply() {
         let mut accepted = null_mut();
         assert_eq!(XbtpLinkAccept(listener.0, &mut accepted, 5000), 0);
         let mut messages = transport_stream::Messages::new(Link(accepted), 64, 128);
-        let query = messages.next_message().unwrap().unwrap();
-        messages.reply_to_version_query_19041(&query).unwrap();
+        messages.serve_19041(0).unwrap();
         drop(messages);
         client.join().unwrap();
     }
