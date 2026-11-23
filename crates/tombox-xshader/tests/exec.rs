@@ -952,22 +952,23 @@ fn scalar_sop1() {
 }
 
 fn saveexec(c: &mut Cases, m: &'static str, op: u32, a: u32, f: fn(u32, u32) -> u32) {
-    let exec0 = 1u32;
-    let newx = f(a, exec0) & 1;
-    let mut pre = pr();
-    pre.sv(10, a).sv(11, 0xffff_ffff).sv(20, 0xdead_0000).sv(21, 0xdead_0001).raw(&[SCC0]);
-    let mut post = pr();
-    post.raw(&[sop1(3, 30, 126), sop1(3, 31, 127)]).scc_to_v(1).raw(&[sop1(3, 126, ic(1)), sop1(3, 127, ic(0))]);
-    post.s2v(0, 20).s2v(2, 30);
-    let wide = m.ends_with("_b64");
-    if wide {
-        post.s2v(3, 21);
+    for exec0 in [0, 1] {
+        let newx = f(a, exec0) & 1;
+        let mut pre = pr();
+        pre.sv(10, a).sv(11, 0xffff_ffff).sv(20, 0xdead_0000).sv(21, 0xdead_0001).raw(&[SCC0, sop1(3, 126, ic(exec0 as i32))]);
+        let mut post = pr();
+        post.raw(&[sop1(3, 30, 126), sop1(3, 31, 127)]).scc_to_v(1).raw(&[sop1(3, 126, ic(1)), sop1(3, 127, ic(0))]);
+        post.s2v(0, 20).s2v(2, 30);
+        let wide = m.ends_with("_b64");
+        if wide {
+            post.s2v(3, 21);
+        }
+        let mut exp = vec![exec0, newx, newx];
+        if wide {
+            exp.push(0);
+        }
+        c.add(m, &pre, &[sop1(op, 20, 10)], &post, &exp);
     }
-    let mut exp = vec![exec0, newx, newx];
-    if wide {
-        exp.push(0);
-    }
-    c.add(m, &pre, &[sop1(op, 20, 10)], &post, &exp);
 }
 
 #[test]
