@@ -154,12 +154,17 @@ fn version_query_round_trip_matches_the_19041_reply() {
                 peer.write_all(prefix).unwrap();
                 continue;
             }
-            for opcode in [1200u32, 0xc000_042a, 0x4000_051a, 1305] {
+            for opcode in [1200u32, 36, 0x8000_04b4, 0xc000_042a, 0x4000_051a, 1305] {
                 for word in [52u32, 44, 44, 0x7654_3210, 1, 0x1020_3040, opcode, 0, 0, 1, 2, 3, 4] {
                     peer.write_all(&word.to_le_bytes()).unwrap();
                 }
             }
             let mut messages = transport_stream::Messages::new(peer, 256, 256);
+            for opcode in [36, 0x8000_04b4] {
+                let failure = [68u32, 0x7654_3210, 0, 0x1020_3040, opcode, 0x8000_4005, 10, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0];
+                let expected: Vec<u8> = failure.into_iter().flat_map(u32::to_le_bytes).collect();
+                assert_eq!(messages.next_message().unwrap(), Some(expected));
+            }
             let unsupported = [68u32, 0x7654_3210, 0, 0x1020_3040, 0xc000_042a, 0x8000_4001, 10, 1, 2, 3, 4, 0x42a, 0, 0, 0, 0, 0];
             let unsupported: Vec<u8> = unsupported.into_iter().flat_map(u32::to_le_bytes).collect();
             assert_eq!(messages.next_message().unwrap(), Some(unsupported));
