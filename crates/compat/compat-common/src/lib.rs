@@ -40,6 +40,7 @@ pub mod live;
 pub mod title_os;
 pub mod kmd_bridge;
 pub mod private_heap;
+pub mod partition_heap;
 pub mod headless;
 pub mod iat;
 

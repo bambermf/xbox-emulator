@@ -7,6 +7,9 @@ use crate::sys::*;
 use crate::virt::{XMemBasicInformation, XMemVirtualQuery};
 use compat_common::record;
 
+#[path = "heap_19041.rs"]
+mod legacy;
+
 const M: &str = "xmem";
 
 const HEAP_NO_SERIALIZE: u32 = 0x1;
@@ -25,7 +28,9 @@ pub extern "system" fn XMemGetTitleHeap() -> Handle {
 #[no_mangle]
 pub unsafe extern "system" fn XMemCreateWin32Heap(flags: u64, base: *mut c_void) -> Handle {
     let f = flags & !0x8000;
-    if f > 7 {
+    let legacy = compat_common::os_host::routes::current_build() == 19041;
+    let max_flags = if legacy { 2 } else { 7 };
+    if f > max_flags {
         SetLastError(ERROR_INVALID_PARAMETER);
         return core::ptr::null_mut();
     }
@@ -33,6 +38,9 @@ pub unsafe extern "system" fn XMemCreateWin32Heap(flags: u64, base: *mut c_void)
         if base.is_null() || base as usize & 0xfff != 0 || f != XMEM_HEAP_IN_PLACE {
             SetLastError(ERROR_INVALID_PARAMETER);
             return core::ptr::null_mut();
+        }
+        if legacy {
+            return legacy::create(base);
         }
         let mut info = XMemBasicInformation::default();
         if XMemVirtualQuery(GetCurrentProcess(), base, &mut info) == 0 || info.state & MEM_COMMIT == 0 {
@@ -43,14 +51,18 @@ pub unsafe extern "system" fn XMemCreateWin32Heap(flags: u64, base: *mut c_void)
         record(M, "XMemCreateWin32Heap", &format!("in-place base={base:p} size={:#x} -> {h:p}", info.region_size));
         return h;
     }
-    if f & XMEM_HEAP_TOOLS != 0 {
+    if !legacy && f & XMEM_HEAP_TOOLS != 0 {
         record(M, "XMemCreateWin32Heap", "tools partition requested; not available");
         SetLastError(ERROR_INVALID_PARAMETER);
         return core::ptr::null_mut();
     }
-    let opts = if f & XMEM_HEAP_SERIALIZED != 0 { 0 } else { HEAP_NO_SERIALIZE };
-    let h = HeapCreate(opts, 0, 0);
-    if !h.is_null() {
+    let (h, title) = if legacy {
+        legacy::partition_heap(f == XMEM_HEAP_TOOLS, flags & 0x8000 != 0)
+    } else {
+        let opts = if f & XMEM_HEAP_SERIALIZED != 0 { 0 } else { HEAP_NO_SERIALIZE };
+        (HeapCreate(opts, 0, 0), true)
+    };
+    if title && !h.is_null() {
         TITLE_HEAPS.lock().unwrap_or_else(|e| e.into_inner()).push(h as usize);
     }
     record(M, "XMemCreateWin32Heap", &format!("flags={flags:#x} -> {h:p}"));
